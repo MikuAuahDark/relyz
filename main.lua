@@ -15,6 +15,7 @@
 -- along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 local relyz = require("relyz")
+local main = {}
 local usage = [[
 Usage: %s [options] songFile visualizer
 
@@ -22,6 +23,8 @@ Options:
   -?, -help, -h          Show this message.
   -r, -render output     Render as video to `output`.
   -<any option> <value>  Other option which may needed by specific visualizer.]]
+
+assert(love.filesystem.createDirectory("relyz"), "Failed to create directory \"relyz\"")
 
 function love.load(argv)
 	local parsedArgument = {}
@@ -52,6 +55,7 @@ function love.load(argv)
 		i = i + 1
 	end end
 
+	-- Check argument
 	if not(songFile) then
 		print("Missing song file!")
 		print(string.format(usage, argv[0] or "program"))
@@ -61,11 +65,48 @@ function love.load(argv)
 		print(string.format(usage, argv[0] or "program"))
 		love.event.quit(1) return
 	end
-	love.event.quit(1) return
+
+	-- Ok load song
+	main.sound, relyz.songMetadata = relyz.loadAudio(songFile)
+	main.audio = love.audio.newSource(main.sound)
+	-- Create window
+	love.window.setMode(relyz.windowWidth, relyz.windowHeight)
+	main.title = "RE:LÖVisual: "..visualizer.." | %d FPS"
+	love.window.setTitle(string.format(main.title, 0))
+	-- Create canvas
+	main.canvas = love.graphics.newCanvas(relyz.canvasWidth, relyz.canvasHeight)
+	-- Load visualizer
+	relyz.loadVisualizer(visualizer, argv)
+	-- Play audio
+	main.audio:play()
+end
+
+function love.quit()
+	-- TODO
 end
 
 function love.update(dT)
+	if main.audio:isPlaying() == false then
+		-- Exit
+		love.event.quit(0) return
+	end
+	return relyz.updateVisualizer(dT, main.sound, main.audio:tell("samples"))
 end
 
 function love.draw()
+	love.graphics.push("all")
+	love.graphics.setCanvas(main.canvas)
+	love.graphics.clear(0, 0, 0, 1)
+	love.graphics.scale(
+		relyz.canvasWidth / relyz.logicalWidth,
+		relyz.canvasHeight / relyz.logicalHeight
+	)
+	relyz.visualizer.draw()
+	love.graphics.pop()
+	love.graphics.draw(
+		main.canvas, 0, 0, 0,
+		relyz.windowWidth / relyz.canvasWidth,
+		relyz.windowHeight / relyz.canvasHeight
+	)
+	love.window.setTitle(string.format(main.title, love.timer.getFPS()))
 end

@@ -108,6 +108,10 @@ do
 	ffi.cdef(header)
 end
 
+-- Initialize
+libav.avformat.av_register_all()
+libav.avcodec.avcodec_register_all()
+
 -- Helper function to free AVFrame
 local function deleteFrame(frame)
 	local x = ffi.new("AVFrame*[1]")
@@ -126,7 +130,7 @@ function relyz.loadAudio(path)
 
 	-- Open input file
 	if libav.avformat.avformat_open_input(tempfmtctx, path, nil, nil) < 0 then
-		error("Failed to load audio: failed to load file", 2)
+		error("Failed to load audio: failed to load file "..path, 2)
 	end
 
 	-- Find stream info
@@ -389,14 +393,18 @@ function visualizer.update(dt, data)
 	struct visualizerData
 	{
 		// Waveform data. Normalized in range of -1...1
+		// It's in waveform[channel][sample];
+		// Where channel = 1 for left, channel = 2 for right.
 		// Never be null
-		const double *waveform[2][samples];
+		const double waveform[2][samples];
 		// Spectrum data (magnitude of FFT result).
 		// Normalized in range of -1...1
 		// Can be null depending on "fft" setting above in
 		// visualizer.load
-		const double *fft[samples/2];
+		const double fft[samples/2];
 	} data;
+	-- Despite beig FFI data, you still use 1-based indexing
+	-- to the data, be careful!
 end
 
 function visualizer.draw()
@@ -443,16 +451,24 @@ function relyz.loadVisualizer(name, arg)
 		end
 		-- Load visualizer
 		relyz.visualizer = assert(love.filesystem.load(path.."init.lua"))()
-		assert(relyz.visualizer.relyz >= relyz.VERSION_NUMBER, "Visualizer version not satisfied")
-		local data = relyz.visualizer.load(arg, relyz.songMetadata, relyz.isRender)
+		assert(
+			relyz.visualizer.relyz and relyz.visualizer.relyz >= relyz.VERSION_NUMBER or not(relyz.visualizer.relyz),
+			"Visualizer version not satisfied"
+		)
+		local data = relyz.visualizer.init(arg, relyz.songMetadata, relyz.isRender)
 		-- Set information & allocate data
-		relyz.neededSamples = data or 1024
+		relyz.neededSamples = data.samples or 1024
 		-- Needed samples must be pot
 		assert(relyz.neededSamples > 0, "Needed samples must be greater than 0")
 		assert(bit.band(relyz.neededSamples, relyz.neededSamples - 1) == 0, "Needed samples must be pot")
-		relyz.waveform = ffi.new("double[?]", relyz.neededSamples)
+		relyz.waveformLeft = ffi.new("double[?]", relyz.neededSamples + 1)
+		relyz.waveformRight = ffi.new("double[?]", relyz.neededSamples + 1)
+		relyz.waveform = ffi.new("double*[3]")
+		relyz.waveform[1] = relyz.waveformLeft
+		relyz.waveform[2] = relyz.waveformRight
 		-- If FFT is set, then allocate needed data
 		if data.fft then
+			-- Initialize FFTW needed data and FFTW plan
 			relyz.fftSignal = ffi.new("fftw_complex[?]", relyz.neededSamples)
 			relyz.fftResult = ffi.new("fftw_complex[?]", relyz.neededSamples)
 			relyz.fftPlan = fftw.plan_dft_1d(
@@ -462,8 +478,64 @@ function relyz.loadVisualizer(name, arg)
 				fftw.FORWARD,
 				fftw.ESTIMATE
 			)
+			relyz.fftAmplitude = ffi.new("double[?]", 0.5 * relyz.neededSamples + 1)
+			-- Calculate window coefficients
+			relyz.window = ffi.new("double[?]", relyz.neededSamples)
+			for i = 1, relyz.neededSamples do
+				local j = i - 1
+				relyz.window[j] = 0.5 * (1.0 - math.cos(2*math.pi * j / (relyz.neededSamples-1)))
+			end
 		end
+	else
+		error("Failed to load visualizer: "..name, 2)
 	end
+end
+
+relyz.visualizerData = ffi.new([[struct {
+	const double *waveform[3];
+	const double *fft;
+}]])
+function relyz.updateVisualizer(dt, sound, pos)
+	local smpLen = sound:getSampleCount()
+	local maxSmp = math.min(pos + relyz.neededSamples, smpLen) - 1
+
+	-- Reinitialize struct
+	relyz.visualizerData.waveform[1] = nil
+	relyz.visualizerData.waveform[2] = nil
+	relyz.visualizerData.fft = nil
+	-- Copy samples
+	local j = 0
+	for i = pos, maxSmp do
+		local l, r = sound:getSample(i, 1), sound:getSample(i, 2)
+		local fin = (l + r) * 0.5 * relyz.window[j]
+		relyz.waveformLeft[j + 1] = l
+		relyz.waveformRight[j + 1] = r
+		relyz.fftSignal[j][0], relyz.fftSignal[j][1] = fin, fin
+		j = j + 1
+	end
+	-- Zero rest
+	for _ = maxSmp + 1, pos + relyz.neededSamples - 1 do
+		relyz.waveformLeft[j + 1], relyz.waveformRight[j + 1] = 0, 0
+		relyz.fftSignal[j] = 0 j = j + 1
+	end
+	-- Set data
+	relyz.visualizerData.waveform[1] = relyz.waveformLeft
+	relyz.visualizerData.waveform[2] = relyz.waveformRight
+
+	-- If FFT is set, calculate FFT
+	if relyz.fftPlan ~= nil then
+		fftw.execute(relyz.fftPlan)
+		for i = 1, relyz.neededSamples * 0.5 do
+			local d = relyz.fftResult[i - 1]
+			local d0, d1 = d[0] / relyz.neededSamples, d[1] / relyz.neededSamples
+			relyz.fftAmplitude[i] = math.sqrt(d0 * d0 + d1 * d1)
+		end
+		-- Set struct data
+		relyz.visualizerData.fft = relyz.fftAmplitude
+	end
+
+	-- Send update data to visualizer
+	return relyz.visualizer.update(dt, relyz.visualizerData)
 end
 
 return relyz

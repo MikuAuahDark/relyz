@@ -14,7 +14,14 @@ These libraries is used to make RE:LÖVisual:
 
 * FFTW 3 FFI binding - 3-clause BSD license
 
-* FFmpeg 3.3.3 (libavcodec 57) - GPLv3 (or later) license (FFmpeg must be built with libx264)
+* FFmpeg 3.3.3 - GPLv3 or later (see notice below).
+
+FFmpeg Notice
+-------------
+
+Although FFmpeg can be compiled with LGPLv2.1 license, the libavformat and the libavcodec **MUST** be built
+with `matroska` muxer and `libx264rgb` encoder respectively, which means requires FFmpeg to be compiled as
+GPL.
 
 License
 -------

@@ -18,7 +18,6 @@ local love = require("love")
 local relyz = require("relyz")
 assert(love._os ~= "Android" and love._os ~= "iOS", "Mobile device doesn't have enough power to run this")
 assert(jit and jit.status(), "LuaJIT is required & JIT compiler must be turned on")
-assert(love.filesystem.createDirectory("relyz"), "Failed to create directory \"relyz\"")
 
 -- The actual canvas size
 relyz.canvasWidth = 3840
