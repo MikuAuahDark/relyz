@@ -15,8 +15,14 @@
 -- along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 local love = require("love")
+local bit = require("bit")
 local ffi = require("ffi")
-local relyz = {}
+local fftw = require("fftw3")
+local relyz = {
+	-- Uses livesim2 version convention
+	VERSION_NUMBER = 01000000,
+	VERSION = "1.0.0",
+}
 
 -- We need to use many strategies to take account of Linux & macOS
 -- Damn this is one of reason why Linux sucks.
@@ -345,3 +351,119 @@ function relyz.loadAudio(path)
 
 	return sounddata, output
 end
+
+--[[
+RE:LÖVisual visualizer script is Lua script placed in the visualizer folder
+with name "init.lua". Little example about RE:LÖVisual visualizer script:
+local asset = require("asset")
+local visualizer = {
+	relyz = 01000000 -- Minimum RE:LÖVisual version needed for this visualizer
+}
+
+function visualizer.init(arg, metadata, render)
+	-- Argument passed from command-line can be fetched from `arg`
+	-- The key is the argument option.
+	-- Initialize your visualizer here. All LOVE functions can be used.
+	-- "metadata" is the song metadata, processed by libavformat.
+	-- Note that the fields inside the table can be nil.
+	-- Example, metadata.artist is the artist name.
+	-- Example, metadata.coverArt is the "ImageData" of the cover art!
+	-- "render" is true if the visualizer is being rendered to video file.
+	return {
+		-- Samples needed for this visualizer ("pot")
+		-- Defaults to 1024 if none specified
+		samples = 1024,
+		-- Is FFT data needed for this visualizer?
+		-- Defaults to false
+		fft = false or true,
+	}
+end
+
+function visualizer.update(dt, data)
+	-- Update your visualizer data here.
+	-- "dt" is the time elapsed between frame.
+	-- "data" is the visualizer data. Note that this is FFI struct
+	-- so "nil" checking must be done with `if value ~= nil then`
+	-- instead of simple `if value then`.
+	-- Data struct definition in C is:
+	struct visualizerData
+	{
+		// Waveform data. Normalized in range of -1...1
+		// Never be null
+		const double *waveform[2][samples];
+		// Spectrum data (magnitude of FFT result).
+		// Normalized in range of -1...1
+		// Can be null depending on "fft" setting above in
+		// visualizer.load
+		const double *fft[samples/2];
+	} data;
+end
+
+function visualizer.draw()
+	-- Draw your visualizer here.
+	-- Visualizer is drawn in 3840x2160 canvas, but uses
+	-- 1280x720 logical resolution. The window size is
+	-- 1216x684.
+	-- It's your responsibility not to mess up the LOVE graphics state
+	-- (example unbalanced push/pop)
+end
+
+return visualizer -- This is important!
+]]
+
+--- Load RE:LÖVisualizer with specified name
+-- @tparam string name Visualizer name.
+-- @tparam table arg Program argument.
+function relyz.loadVisualizer(name, arg)
+	-- Visualizer is stored in `relyz` folder in the save directory
+	-- When visualizer is loaded, the window is assumed has been created
+	-- so `love.graphics` module can be used (and must be available)
+	local path = "relyz/"..name.."/"
+	if love.filesystem.getInfo(path, "directory") and love.filesystem.getInfo(path.."init.lua", "file") then
+		-- Preload asset loader
+		package.preload.asset = function()
+			return {
+				-- Return LOVE Image object
+				loadImage = function(a, ...)
+					return love.graphics.newImage(path..a, ...)
+				end,
+				-- Return LOVE File object
+				loadFile = function(a, ...)
+					return love.filesystem.newFile(path..a, ...)
+				end,
+				-- Return Lua chunk (but not running yet)
+				loadScript = function(a)
+					return love.filesystem.load(path..a)
+				end,
+				-- Return the file content as string
+				readFile = function(a)
+					return love.filesystem.read(path..a)
+				end
+			}
+		end
+		-- Load visualizer
+		relyz.visualizer = assert(love.filesystem.load(path.."init.lua"))()
+		assert(relyz.visualizer.relyz >= relyz.VERSION_NUMBER, "Visualizer version not satisfied")
+		local data = relyz.visualizer.load(arg, relyz.songMetadata, relyz.isRender)
+		-- Set information & allocate data
+		relyz.neededSamples = data or 1024
+		-- Needed samples must be pot
+		assert(relyz.neededSamples > 0, "Needed samples must be greater than 0")
+		assert(bit.band(relyz.neededSamples, relyz.neededSamples - 1) == 0, "Needed samples must be pot")
+		relyz.waveform = ffi.new("double[?]", relyz.neededSamples)
+		-- If FFT is set, then allocate needed data
+		if data.fft then
+			relyz.fftSignal = ffi.new("fftw_complex[?]", relyz.neededSamples)
+			relyz.fftResult = ffi.new("fftw_complex[?]", relyz.neededSamples)
+			relyz.fftPlan = fftw.plan_dft_1d(
+				relyz.neededSamples,
+				relyz.fftSignal,
+				relyz.fftResult,
+				fftw.FORWARD,
+				fftw.ESTIMATE
+			)
+		end
+	end
+end
+
+return relyz
