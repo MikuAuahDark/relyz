@@ -15,7 +15,7 @@
 -- along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 local relyz = require("relyz")
-local main = {}
+local main = {time = 0}
 local usage = [[
 Usage: %s [options] songFile visualizer
 
@@ -136,20 +136,32 @@ function love.load(argv)
 	main.canvas = love.graphics.newCanvas(relyz.canvasWidth, relyz.canvasHeight)
 	-- Load visualizer
 	relyz.loadVisualizer(visualizer, parsedArgument)
-	-- Play audio
-	main.audio:play()
+	main.audioDuration = main.audio:getDuration()
+	if parsedArgument.r or parsedArgument.render then
+		local out = parsedArgument.r or parsedArgument.render
+		relyz.initializeEncoder(out)
+	else
+		-- Play audio if not in encode mode
+		main.audio:play()
+	end
 end
 
 function love.quit()
-	-- TODO
+	print("love quit")
+	if relyz.enc then
+		relyz.doneEncode()
+	end
 end
 
 function love.update(dT)
-	if main.audio:isPlaying() == false then
+	if main.time >= main.audioDuration then
 		-- Exit
 		love.event.quit(0) return
 	end
-	return relyz.updateVisualizer(dT, main.sound, main.audio:tell("samples"))
+	-- Update
+	local adT = relyz.enc and 1/60 or dT
+	relyz.updateVisualizer(adT, main.sound, main.audio:tell("samples"))
+	main.time = main.time + adT
 end
 
 function love.draw()
@@ -168,4 +180,11 @@ function love.draw()
 		relyz.windowHeight / relyz.canvasHeight
 	)
 	love.window.setTitle(string.format(main.title, love.timer.getFPS()))
+
+	-- Canvas pointer supply to encoder
+	if relyz.enc then
+		local imageData = main.canvas:newImageData()
+		relyz.supplyEncoder(imageData:getPointer())
+		imageData:release()
+	end
 end

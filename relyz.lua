@@ -118,6 +118,12 @@ local function deleteFrame(frame)
 	x[0] = frame libav.avutil.av_frame_free(x)
 end
 
+-- Helper function to free AVCodecContext
+local function deleteCodecContext(ctx)
+	local x = ffi.new("AVCodecContext*[1]")
+	x[0] = ctx libav.avcodec.avcodec_free_context(x)
+end
+
 --- Load audio from system-dependent path
 -- This function uses FFmpeg API (libav) to load audio.
 -- @tparam string path Audio path
@@ -182,13 +188,13 @@ function relyz.loadAudio(path)
 
 	acctx = libav.avcodec.avcodec_alloc_context3(acodec)
 	if libav.avcodec.avcodec_copy_context(acctx, audiostream.codec) < 0 then
-		libav.avcodec.avcodec_close(acctx)
+		deleteCodecContext(acctx)
 		libav.avformat.avformat_close_input(tempfmtctx)
 		error("Failed to load audio: avcodec_copy_context failed", 2)
 	end
 
 	if libav.avcodec.avcodec_open2(acctx, acodec, nil) < 0 then
-		libav.avcodec.avcodec_close(acctx)
+		deleteCodecContext(acctx)
 		libav.avformat.avformat_close_input(tempfmtctx)
 		error("Failed to load audio: avcodec_open2 failed", 2)
 	end
@@ -205,7 +211,7 @@ function relyz.loadAudio(path)
 	)
 
 	if libav.swresample.swr_init(SwrCtx[0]) < 0 then
-		libav.avcodec.avcodec_close(acctx)
+		deleteCodecContext(acctx)
 		libav.avformat.avformat_close_input(tempfmtctx)
 		error("Failed to load audio: swresample init failed", 2)
 	end
@@ -246,12 +252,12 @@ function relyz.loadAudio(path)
 					)
 				else
 					-- Cannot open codec. Just ignore it.
-					libav.avcodec.avcodec_close(vcctx)
+					deleteCodecContext(vcctx)
 					vididx = nil
 				end
 			else
 				-- Cannot copy context. Just ignore it.
-				libav.avcodec.avcodec_close(vcctx)
+				deleteCodecContext(vcctx)
 				vididx = nil
 			end
 		end
@@ -277,13 +283,13 @@ function relyz.loadAudio(path)
 				deleteFrame(aframe)
 				libav.avcodec.av_free_packet(packet)
 				libav.swresample.swr_free(SwrCtx)
-				libav.avcodec.avcodec_close(acctx)
+				deleteCodecContext(acctx)
 
 				if vididx then
 					libav.swscale.sws_freeContext(SwsCtx)
 					deleteFrame(vframe)
 					deleteFrame(vframergb)
-					libav.avcodec.avcodec_close(vcodec)
+					deleteCodecContext(vcodec)
 				end
 
 				libav.avformat.avformat_close_input(tempfmtctx)
@@ -301,13 +307,13 @@ function relyz.loadAudio(path)
 					deleteFrame(aframe)
 					libav.avcodec.av_free_packet(packet)
 					libav.swresample.swr_free(SwrCtx)
-					libav.avcodec.avcodec_close(acctx)
+					deleteCodecContext(acctx)
 
 					if vididx then
 						libav.swscale.sws_freeContext(SwsCtx)
 						deleteFrame(vframe)
 						deleteFrame(vframergb)
-						libav.avcodec.avcodec_close(vcctx)
+						deleteCodecContext(vcctx)
 					end
 
 					libav.avformat.avformat_close_input(tempfmtctx)
@@ -334,7 +340,7 @@ function relyz.loadAudio(path)
 				libav.swscale.sws_freeContext(SwsCtx)
 				deleteFrame(vframe)
 				deleteFrame(vframergb)
-				libav.avcodec.avcodec_close(vcctx)
+				deleteCodecContext(vcctx)
 				vididx = nil
 			end
 		end
@@ -350,7 +356,7 @@ function relyz.loadAudio(path)
 	deleteFrame(aframe)
 	libav.avcodec.av_free_packet(packet)
 	libav.swresample.swr_free(SwrCtx)
-	libav.avcodec.avcodec_close(acctx)
+	deleteCodecContext(acctx)
 	libav.avformat.avformat_close_input(tempfmtctx)
 
 	return sounddata, output
@@ -555,18 +561,182 @@ function relyz.verifyEncoder()
 	end
 
 	-- Check AAC encoder
+	--[[
 	local test = libav.avcodec.avcodec_find_encoder("AV_CODEC_ID_AAC")
 	if test == nil then
 		return "No AAC encoder. Make sure to build FFmpeg with at least native AAC encoder!"
 	end
+	]]
 
-	-- Check libx264rgb
-	test = libav.avcodec.avcodec_find_encoder_by_name("libx264rgb")
+	-- Check libx264
+	local test = libav.avcodec.avcodec_find_encoder_by_name("libx264")
 	if test == nil then
-		return "libx264rgb encoder not found. Make sure to build FFmpeg with libx264 RGB support!"
+		return "libx264 encoder not found. Make sure to build FFmpeg with libx264 support!"
 	end
 
 	return nil
+end
+
+-- Internal function to set AVRational
+local function toAVRational(v, n, d)
+	v.num, v.den = n, d
+end
+
+function relyz.initializeEncoder(output)
+	-- Encoder table
+	relyz.enc = {frameCount = 0}
+
+	-- Alloc new format context
+	relyz.enc.formatContextP = ffi.new("AVFormatContext*[1]")
+	if libav.avformat.avformat_alloc_output_context2(relyz.enc.formatContextP, nil, "matroska", output) < 0 then
+		error("Cannot alloc output context", 2)
+	end
+	local enc = relyz.enc.formatContextP[0]
+	do
+		local pbref = ffi.new("AVIOContext*[1]")
+		pbref[0] = enc.pb
+        if libav.avformat.avio_open(pbref, output, 2) < 0 then
+            error("Could not open output file", 2)
+		end
+    end
+
+	-- Add x264 encoder
+	local x264encoder = libav.avcodec.avcodec_find_encoder_by_name("libx264")
+	relyz.enc.stream = libav.avformat.avformat_new_stream(enc, x264encoder)
+	toAVRational(relyz.enc.stream.time_base, 1, 60) -- 60 FPS
+	-- Codec context setup
+	--relyz.enc.codecContext = libav.avcodec.avcodec_alloc_context3(x264encoder)
+	relyz.enc.codecContext = relyz.enc.stream.codec
+	--libav.avutil.av_opt_set_defaults(relyz.enc.codecContext)
+	relyz.enc.codecContext.width = relyz.canvasWidth
+	relyz.enc.codecContext.height = relyz.canvasHeight
+	relyz.enc.codecContext.gop_size = 60
+	relyz.enc.codecContext.pix_fmt = "AV_PIX_FMT_YUV444P"
+	toAVRational(relyz.enc.codecContext.time_base, 1, 60) -- 60 FPS
+	libav.avutil.av_opt_set_int(relyz.enc.codecContext, "crf", 0, 1)
+	libav.avutil.av_opt_set(relyz.enc.codecContext, "preset", "medium", 1)
+
+	-- Open codec & initialize codec context
+	if libav.avcodec.avcodec_open2(relyz.enc.codecContext, x264encoder, nil) < 0 then
+		--deleteCodecContext(relyz.enc.codecContext)
+		libav.avformat.avformat_free_context(relyz.enc.formatContextP)
+		error("Cannot open codec", 2)
+	end
+
+	-- Create new frame
+	relyz.enc.frame = libav.avutil.av_frame_alloc()
+	relyz.enc.frame.width = relyz.canvasWidth
+	relyz.enc.frame.height = relyz.canvasHeight
+	relyz.enc.frame.format = ffi.cast("int", relyz.enc.codecContext.pix_fmt)
+	libav.avutil.av_image_alloc(
+		relyz.enc.frame.data,
+		relyz.enc.frame.linesize,
+		relyz.canvasWidth,
+		relyz.canvasWidth,
+		relyz.enc.codecContext.pix_fmt, 32
+	)
+
+	-- Create sws context
+	relyz.enc.swsCtx = libav.swscale.sws_getContext(
+		relyz.canvasWidth,
+		relyz.canvasWidth,
+		"AV_PIX_FMT_RGBA",
+		relyz.canvasWidth,
+		relyz.canvasWidth,
+		relyz.enc.codecContext.pix_fmt,
+		2, 						-- SWS_BILINEAR
+		nil, nil, nil
+	)
+	if relyz.enc.swsCtx == nil then
+		libav.avutil.av_freep(relyz.enc.frame.data)
+		deleteFrame(relyz.enc.frame)
+		--deleteCodecContext(relyz.enc.codecContext)
+		libav.avformat.avformat_free_context(relyz.enc.formatContextP)
+		error("swscale init failed", 2)
+	end
+
+	-- Create packet
+	relyz.enc.packet = ffi.new("AVPacket[1]")
+
+	-- Write header. Call init output
+	local ret = libav.avformat.avformat_init_output(enc, nil)
+	if ret == 0 then
+		-- Initialize in header. Call write header
+		ret = libav.avformat.avformat_write_header(enc, nil)
+	end
+	if ret < 0 then
+		-- Error
+		libav.avutil.av_freep(relyz.enc.frame.data)
+		deleteFrame(relyz.enc.frame)
+		--deleteCodecContext(relyz.enc.codecContext)
+		libav.avformat.avformat_free_context(relyz.enc.formatContextP)
+		error("Header write failed", 2)
+	end
+	libav.avformat.av_dump_format(enc, 0, output, 1)
+
+	relyz.enc.tempData = ffi.new("__declspec(align(32)) struct {uint8_t *data[8]; int linesize[8];}")
+	relyz.enc.tempData.linesize[0] = relyz.canvasHeight * 4
+end
+
+-- This function must be called for encoding
+function relyz.supplyEncoder(imagePointer)
+	local gotImg = ffi.new("int[1]")
+	-- Colorspace conversion
+	relyz.enc.tempData.data[0] = ffi.cast("uint8_t*", imagePointer)
+	libav.swscale.sws_scale(relyz.enc.swsCtx,
+		ffi.cast("const uint8_t *const *", relyz.enc.tempData.data),
+		relyz.enc.tempData.linesize, 0, relyz.canvasHeight,
+		relyz.enc.frame.data, relyz.enc.frame.linesize
+	)
+	-- Init packet
+	libav.avcodec.av_init_packet(relyz.enc.packet)
+	relyz.enc.packet[0].data = nil
+	relyz.enc.packet[0].size = 0
+	relyz.enc.frame.pts = relyz.enc.frameCount
+
+	-- Encode video
+	if libav.avcodec.avcodec_encode_video2(relyz.enc.codecContext, relyz.enc.packet, relyz.enc.frame, gotImg) < 0 then
+		-- Error
+		libav.avutil.av_freep(relyz.enc.frame.data)
+		deleteFrame(relyz.enc.frame)
+		--deleteCodecContext(relyz.enc.codecContext)
+		libav.avformat.avformat_free_context(relyz.enc.formatContextP)
+		error("Encode failed", 2)
+	elseif gotImg[0] == 1 then
+		-- Ok got frame. Write the packet
+		print("write", relyz.enc.packet[0].stream_index)
+		libav.avcodec.av_packet_rescale_ts(relyz.enc.packet, relyz.enc.codecContext.time_base, relyz.enc.stream.time_base)
+		libav.avformat.av_interleaved_write_frame(relyz.enc.formatContextP[0], relyz.enc.packet[0])
+		print("av_interleaved_write_frame")
+		libav.avcodec.av_packet_unref(relyz.enc.packet)
+		print("write ok")
+	end
+
+	-- Increase frame counter
+	relyz.enc.frameCount = relyz.enc.frameCount + 1
+end
+
+-- On encode done or quit requested.
+function relyz.doneEncode()
+	-- Send flush packet
+	libav.avcodec.avcodec_send_frame(relyz.enc.codecContext, nil)
+	if libav.avcodec.avcodec_receive_packet(relyz.enc.codecContext, relyz.enc.packet) == 0 then
+		-- Ok got frame. Write the packet
+		libav.avformat.av_interleaved_write_frame(relyz.enc.formatContextP[0], relyz.enc.packet[0])
+		libav.avcodec.av_packet_unref(relyz.enc.packet)
+	end
+
+	-- Write trail header
+	libav.avformat.av_write_trailer(relyz.enc.formatContextP[0])
+	-- Free resource
+	libav.avutil.av_freep(relyz.enc.rgbaFrame.data)
+	deleteFrame(relyz.enc.rgbaFrame)
+	libav.avutil.av_freep(relyz.enc.frame.data)
+	deleteFrame(relyz.enc.frame)
+	--deleteCodecContext(relyz.enc.codecContext)
+	libav.avformat.avformat_free_context(relyz.enc.formatContextP)
+	-- Done.
+	relyz.enc = nil
 end
 
 return relyz
