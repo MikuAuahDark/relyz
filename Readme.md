@@ -19,9 +19,13 @@ These libraries is used to make RE:LÖVisual:
 FFmpeg Notice
 -------------
 
-Although FFmpeg can be compiled with LGPLv2.1 license, the libavformat and the libavcodec **MUST** be built
-with `matroska` muxer and `libx264rgb` encoder respectively, which means requires FFmpeg to be compiled as
-GPL.
+FFmpeg 4.0 is not supported at the moment. Plan to support it is coming soon!
+
+Although FFmpeg can be compiled with LGPLv2.1 license, libavcodec **MUST** be built with
+`libx264rgb` encoder respectively, which means requires FFmpeg to be compiled with `libx264` and as GPL.
+
+RE:LÖVisual also requires at least one AAC encoder to be present and `matroska` muxer. It's usually default
+but may not, depending on your build options.
 
 License
 -------

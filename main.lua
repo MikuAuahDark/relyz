@@ -22,12 +22,56 @@ Usage: %s [options] songFile visualizer
 Options:
   -?, -help, -h          Show this message.
   -r, -render output     Render as video to `output`.
+  -about                 Show information.
   -<any option> <value>  Other option which may needed by specific visualizer.]]
+
+local about = [[
+RE:LOVisual v%s
+
+Copyright (C) 2018 MikuAuahDark
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.]]
 
 assert(love.filesystem.createDirectory("relyz"), "Failed to create directory \"relyz\"")
 
+-- Code for built-in wave generator (debugging purpose)
+main.wave = {
+	sine = function(f, t)
+		return math.sin(2*math.pi * f * t)
+	end
+}
+
+function main.generateWave(wave, freq, length)
+	local smpLen = length * 44100
+	local sd = love.sound.newSoundData(smpLen, 44100, 16, 2)
+	for i = 1, smpLen do
+		local v = main.wave[wave](freq, (i - 1) / 44100)
+		sd:setSample(i - 1, 1, v)
+		sd:setSample(i - 1, 2, v)
+	end
+
+	return sd, {}
+end
+
 function love.load(argv)
 	local parsedArgument = {}
+
+	-- Check encoder satisfication
+	local satisfy = relyz.verifyEncoder()
+	if satisfy then
+		print(satisfy)
+	end
 
 	-- Parse argument
 	local songFile, visualizer
@@ -37,6 +81,10 @@ function love.load(argv)
 		-- Help?
 		if arg == "-?" or arg == "-help" or arg == "-h" then
 			print(string.format(usage, argv[0] or "program"))
+			love.event.quit(0) return
+		-- About?
+		elseif arg == "-about" then
+			print(string.format(about, relyz.VERSION))
 			love.event.quit(0) return
 		-- If argument starts with "-" then it's options
 		elseif arg:sub(1, 1) == "-" and argv[i + 1] then
@@ -66,8 +114,19 @@ function love.load(argv)
 		love.event.quit(1) return
 	end
 
-	-- Ok load song
-	main.sound, relyz.songMetadata = relyz.loadAudio(songFile)
+	-- If song file is somewhat a pattern, then try to use built-in generator
+	-- The pattern is: wave:frequency:duration
+	if songFile:find("%w+:%d+:%d+$") == 1 then
+		local wave, freq, dur = songFile:match("(%w+):(%d+):(%d+)$")
+		if main.wave[wave] then
+			main.sound, relyz.songMetadata = main.generateWave(wave, freq*1, dur*1) -- * 1 = tonumber
+		end
+	end
+
+	if not(main.sound) then
+		-- The previous function is unsuccessful, so load it as usual.
+		main.sound, relyz.songMetadata = relyz.loadAudio(songFile)
+	end
 	main.audio = love.audio.newSource(main.sound)
 	-- Create window
 	love.window.setMode(relyz.windowWidth, relyz.windowHeight)
@@ -76,7 +135,7 @@ function love.load(argv)
 	-- Create canvas
 	main.canvas = love.graphics.newCanvas(relyz.canvasWidth, relyz.canvasHeight)
 	-- Load visualizer
-	relyz.loadVisualizer(visualizer, argv)
+	relyz.loadVisualizer(visualizer, parsedArgument)
 	-- Play audio
 	main.audio:play()
 end

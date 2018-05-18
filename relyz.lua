@@ -495,6 +495,7 @@ relyz.visualizerData = ffi.new([[struct {
 	const double *waveform[3];
 	const double *fft;
 }]])
+local Sqrt2 = math.sqrt(2)
 function relyz.updateVisualizer(dt, sound, pos)
 	local smpLen = sound:getSampleCount()
 	local maxSmp = math.min(pos + relyz.neededSamples, smpLen) - 1
@@ -516,7 +517,8 @@ function relyz.updateVisualizer(dt, sound, pos)
 	-- Zero rest
 	for _ = maxSmp + 1, pos + relyz.neededSamples - 1 do
 		relyz.waveformLeft[j + 1], relyz.waveformRight[j + 1] = 0, 0
-		relyz.fftSignal[j] = 0 j = j + 1
+		relyz.fftSignal[j][0], relyz.fftSignal[j][1] = 0, 0
+		j = j + 1
 	end
 	-- Set data
 	relyz.visualizerData.waveform[1] = relyz.waveformLeft
@@ -527,8 +529,8 @@ function relyz.updateVisualizer(dt, sound, pos)
 		fftw.execute(relyz.fftPlan)
 		for i = 1, relyz.neededSamples * 0.5 do
 			local d = relyz.fftResult[i - 1]
-			local d0, d1 = d[0] / relyz.neededSamples, d[1] / relyz.neededSamples
-			relyz.fftAmplitude[i] = math.sqrt(d0 * d0 + d1 * d1)
+			-- The last division is "normalizing" part
+			relyz.fftAmplitude[i] = math.sqrt(d[0] * d[0] + d[1] * d[1]) / ((relyz.neededSamples * 0.5) / Sqrt2)
 		end
 		-- Set struct data
 		relyz.visualizerData.fft = relyz.fftAmplitude
@@ -536,6 +538,35 @@ function relyz.updateVisualizer(dt, sound, pos)
 
 	-- Send update data to visualizer
 	return relyz.visualizer.update(dt, relyz.visualizerData)
+end
+
+--- Verifies the existence of encoder.
+-- @treturn string Error message (or nil if libav is satisfied)
+function relyz.verifyEncoder()
+	local oc = ffi.new("AVFormatContext*[1]")
+
+	-- Check matroska muxer
+	local v = libav.avformat.avformat_alloc_output_context2(oc, nil, "matroska", nil)
+	if v >= 0 then
+		libav.avformat.avformat_free_context(oc[0])
+		oc[0] = nil
+	else
+		return "Matroska muxer cannot be initialized!"
+	end
+
+	-- Check AAC encoder
+	local test = libav.avcodec.avcodec_find_encoder("AV_CODEC_ID_AAC")
+	if test == nil then
+		return "No AAC encoder. Make sure to build FFmpeg with at least native AAC encoder!"
+	end
+
+	-- Check libx264rgb
+	test = libav.avcodec.avcodec_find_encoder_by_name("libx264rgb")
+	if test == nil then
+		return "libx264rgb encoder not found. Make sure to build FFmpeg with libx264 RGB support!"
+	end
+
+	return nil
 end
 
 return relyz
