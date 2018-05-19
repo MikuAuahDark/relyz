@@ -15,6 +15,7 @@
 -- along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 local relyz = require("relyz")
+local ffi = require("ffi")
 local main = {time = 0}
 local usage = [[
 Usage: %s [options] songFile visualizer
@@ -64,6 +65,48 @@ function main.generateWave(wave, freq, length)
 	return sd, {}
 end
 
+function main.initializeStereoMix(bufsize)
+	local mix
+	-- Find stereo mix device
+	for _, v in ipairs(love.audio.getRecordingDevices()) do
+		if v:getName():lower():find("stereo mix", 1, true) then
+			mix = v
+			break
+		end
+	end
+	assert(mix, "No Stereo Mix found")
+	assert(mix:start(bufsize * 4, 44100, 16, 2), "Failed to record")
+
+	-- Set mix table
+	main.mix = {device = mix}
+	main.mix.buffer = bufsize
+	main.mix.soundData = love.sound.newSoundData(bufsize, 44100, 16, 2)
+	main.mix.soundDataPtr = ffi.cast("int32_t*", main.mix.soundData:getPointer())
+	main.mix.ffiRing = ffi.new("int32_t[?]", bufsize)
+	main.mix.ffiRingPos = 0
+	print(main.mix.soundDataPtr)
+end
+
+function main.mixUpdate()
+	local capturedSound = main.mix.device:getData()
+
+	-- capturedSound can be nil
+	if capturedSound then
+		local captureSize = capturedSound:getSampleCount()
+		local capturePtr = ffi.cast("int32_t*", capturedSound:getPointer())
+		-- Copy data to FFI ring buffer (should invent faster method -_-)
+		for i = 0, captureSize - 1 do
+			local idx = (i + main.mix.ffiRingPos) % main.mix.buffer
+			main.mix.ffiRing[idx] = capturePtr[i]
+		end
+		-- Copy data to SoundData continuous buffer
+		for i = 0, main.mix.buffer - 1 do
+			main.mix.soundDataPtr[i] = main.mix.ffiRing[main.mix.ffiRingPos]
+			main.mix.ffiRingPos = (main.mix.ffiRingPos + 1) % main.mix.buffer
+		end
+	end
+end
+
 function love.load(argv)
 	local parsedArgument = {}
 
@@ -87,7 +130,7 @@ function love.load(argv)
 			print(string.format(about, relyz.VERSION))
 			love.event.quit(0) return
 		-- If argument starts with "-" then it's options
-		elseif arg:sub(1, 1) == "-" and argv[i + 1] then
+		elseif #arg > 1 and arg:sub(1, 1) == "-" and argv[i + 1] then
 			parsedArgument[arg:sub(2)] = argv[i + 1]
 			i = i + 1
 		-- If it's not, then it's maybe the songFile
@@ -121,13 +164,17 @@ function love.load(argv)
 		if main.wave[wave] then
 			main.sound, relyz.songMetadata = main.generateWave(wave, freq*1, dur*1) -- * 1 = tonumber
 		end
+	elseif songFile == "-" then
+		-- Stereo mix.
+		main.mixMode = true
+		relyz.songMetadata = {}
 	end
 
-	if not(main.sound) then
+	if not(main.sound) and not(main.mixMode) then
 		-- The previous function is unsuccessful, so load it as usual.
 		main.sound, relyz.songMetadata = relyz.loadAudio(songFile)
 	end
-	main.audio = love.audio.newSource(main.sound)
+
 	-- Create window
 	love.window.setMode(relyz.windowWidth, relyz.windowHeight)
 	main.title = "RE:LÖVisual: "..visualizer.." | %d FPS"
@@ -136,18 +183,31 @@ function love.load(argv)
 	main.canvas = love.graphics.newCanvas(relyz.canvasWidth, relyz.canvasHeight)
 	-- Load visualizer
 	relyz.loadVisualizer(visualizer, parsedArgument)
-	main.audioDuration = main.audio:getDuration()
+	-- Get duration
+	main.audioDuration = main.audio and main.audio:getDuration() or math.huge
+
+	-- Attempt to setup the mix mode
+	if main.mixMode then
+		-- In stereo mix, we don't actually create source
+		main.time = -math.huge
+		main.initializeStereoMix(relyz.neededSamples)
+		main.sound = main.mix.soundData
+	else
+		-- Create audio source
+		main.audio = love.audio.newSource(main.sound)
+	end
+
 	if parsedArgument.r or parsedArgument.render then
+		assert(not(main.mixMode), "Render cannot be used when reading stereo mix")
 		local out = parsedArgument.r or parsedArgument.render
 		relyz.initializeEncoder(out)
-	else
+	elseif not(main.mixMode) then
 		-- Play audio if not in encode mode
 		main.audio:play()
 	end
 end
 
 function love.quit()
-	print("love quit")
 	if relyz.enc then
 		relyz.doneEncode()
 	end
@@ -160,7 +220,8 @@ function love.update(dT)
 	end
 	-- Update
 	local adT = relyz.enc and 1/60 or dT
-	relyz.updateVisualizer(adT, main.sound, main.audio:tell("samples"))
+	if main.mixMode then main.mixUpdate() end
+	relyz.updateVisualizer(adT, main.sound, main.audio and main.audio:tell("samples") or 0)
 	main.time = main.time + adT
 end
 
