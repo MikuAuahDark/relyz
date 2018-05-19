@@ -441,9 +441,23 @@ function relyz.loadVisualizer(name, arg)
 				loadImage = function(a, ...)
 					return love.graphics.newImage(path..a, ...)
 				end,
+				-- Return LOVE Image object
+				loadUserImage = function(a, ...)
+					local x = assert(io.open(a, "rb"))
+					local img = love.graphics.newImage(
+						love.filesystem.newFileData(x:read("*a"), a),
+						...
+					)
+					x:close()
+					return img
+				end,
 				-- Return LOVE File object
 				loadFile = function(a, ...)
 					return love.filesystem.newFile(path..a, ...)
+				end,
+				-- Return LOVE Font object
+				loadFont = function(a, size)
+					return love.graphics.newFont(path..a, size)
 				end,
 				-- Return Lua chunk (but not running yet)
 				loadScript = function(a)
@@ -452,6 +466,12 @@ function relyz.loadVisualizer(name, arg)
 				-- Return the file content as string
 				readFile = function(a)
 					return love.filesystem.read(path..a)
+				end,
+				-- Return the file content as string
+				readUserFile = function(a)
+					local x = assert(io.open(a, "rb"))
+					local y = x:read("*a") x:close()
+					return y
 				end
 			}
 		end

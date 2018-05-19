@@ -183,8 +183,6 @@ function love.load(argv)
 	main.canvas = love.graphics.newCanvas(relyz.canvasWidth, relyz.canvasHeight)
 	-- Load visualizer
 	relyz.loadVisualizer(visualizer, parsedArgument)
-	-- Get duration
-	main.audioDuration = main.audio and main.audio:getDuration() or math.huge
 
 	-- Attempt to setup the mix mode
 	if main.mixMode then
@@ -195,6 +193,7 @@ function love.load(argv)
 	else
 		-- Create audio source
 		main.audio = love.audio.newSource(main.sound)
+		main.audioDuration = main.audio:getDuration()
 	end
 
 	if parsedArgument.r or parsedArgument.render then
