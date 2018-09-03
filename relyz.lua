@@ -18,6 +18,7 @@ local love = require("love")
 local bit = require("bit")
 local ffi = require("ffi")
 local fftw = require("fftw3")
+local has_ls2x, ls2x = pcall(require, "ls2x")
 local relyz = {
 	-- Uses livesim2 version convention
 	VERSION_NUMBER = 01000000,
@@ -757,6 +758,21 @@ function relyz.doneEncode()
 	libav.avformat.avformat_free_context(relyz.enc.formatContextP)
 	-- Done.
 	relyz.enc = nil
+end
+
+if has_ls2x and ls2x.venc then
+	local emptySD = ffi.new("int16_t[2048]")
+	function relyz.initializeEncoder(out)
+		assert(ls2x.venc.startSession(out, relyz.canvasWidth, relyz.canvasHeight, 60, 44100), "cannot initialize encoding session")
+		relyz.enc = true
+	end
+	function relyz.supplyEncoder(imagePointer)
+		assert(ls2x.venc.supply(imagePointer, emptySD, 1024), "failed to supply data to encoder")
+	end
+	function relyz.doneEncode()
+		relyz.enc = false
+		return ls2x.venc.endSession()
+	end
 end
 
 return relyz

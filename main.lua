@@ -16,7 +16,7 @@
 
 local relyz = require("relyz")
 local ffi = require("ffi")
-local main = {time = 0}
+local main = {time = 0, fpsTimerUpdate = 0}
 local usage = [[
 Usage: %s [options] songFile visualizer
 
@@ -176,7 +176,9 @@ function love.load(argv)
 	end
 
 	-- Create window
-	love.window.setMode(relyz.windowWidth, relyz.windowHeight)
+	love.window.setMode(relyz.windowWidth, relyz.windowHeight, {
+		vsync = (parsedArgument.r or parsedArgument.render) and 0 or 1
+	})
 	main.title = "RE:LÖVisual: "..visualizer.." | %d FPS"
 	love.window.setTitle(string.format(main.title, 0))
 	-- Create canvas
@@ -190,6 +192,7 @@ function love.load(argv)
 		main.time = -math.huge
 		main.initializeStereoMix(relyz.neededSamples)
 		main.sound = main.mix.soundData
+		main.audioDuration = math.huge
 	else
 		-- Create audio source
 		main.audio = love.audio.newSource(main.sound)
@@ -200,6 +203,9 @@ function love.load(argv)
 		assert(not(main.mixMode), "Render cannot be used when reading stereo mix")
 		local out = parsedArgument.r or parsedArgument.render
 		relyz.initializeEncoder(out)
+		main.audioPosition = 0
+		main.audioLength = main.sound:getSampleCount()
+		main.audioSampleRate = main.sound:getSampleRate()
 	elseif not(main.mixMode) then
 		-- Play audio if not in encode mode
 		main.audio:play()
@@ -220,8 +226,16 @@ function love.update(dT)
 	-- Update
 	local adT = relyz.enc and 1/60 or dT
 	if main.mixMode then main.mixUpdate() end
-	relyz.updateVisualizer(adT, main.sound, main.audio and main.audio:tell("samples") or 0)
+	print("update", main.audioPosition)
+	relyz.updateVisualizer(adT, main.sound, relyz.enc and math.floor(main.audioPosition) or (main.audio and main.audio:tell("samples") or 0))
 	main.time = main.time + adT
+	
+	main.fpsTimerUpdate = main.fpsTimerUpdate + dT
+	main.audioPosition = math.min(main.audioLength, main.audioPosition + main.audioSampleRate * adT)
+	while main.fpsTimerUpdate >= 1 do
+		love.window.setTitle(string.format(main.title, love.timer.getFPS()))
+		main.fpsTimerUpdate = main.fpsTimerUpdate - 1
+	end
 end
 
 function love.draw()
@@ -239,7 +253,6 @@ function love.draw()
 		relyz.windowWidth / relyz.canvasWidth,
 		relyz.windowHeight / relyz.canvasHeight
 	)
-	love.window.setTitle(string.format(main.title, love.timer.getFPS()))
 
 	-- Canvas pointer supply to encoder
 	if relyz.enc then
