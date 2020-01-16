@@ -20,8 +20,8 @@ assert(love._os ~= "Android" and love._os ~= "iOS", "Mobile device doesn't have 
 assert(jit and jit.status(), "LuaJIT is required & JIT compiler must be turned on")
 
 -- The actual canvas size
-relyz.canvasWidth = 3840
-relyz.canvasHeight = 2160
+relyz.canvasWidth = 1280
+relyz.canvasHeight = 720
 -- The logical screen size for visualizer
 relyz.logicalWidth = 1280
 relyz.logicalHeight = 720
@@ -32,13 +32,14 @@ relyz.windowHeight = 684
 -- Lock global variable from changes
 setmetatable(_G, {
 	__index = function(_, var) error("Undefined variable: \""..var.."\"", 2) end,
-	__newindex = function(_, var) error("New variable not allowed: \""..var.."\"", 2) end
+    __newindex = function(_, var) error("New variable not allowed: \""..var.."\"", 2) end,
+    __metatable = "global variable protection"
 })
 
 function love.conf(t)
     t.identity = "lovelyzer"
     t.appendidentity = true
-    t.version = "11.1"
+    t.version = "11.3"
 	t.window = nil
 
     t.modules.joystick = false
