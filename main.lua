@@ -1,5 +1,5 @@
 -- RE:LÖVisual
--- Copyright (C) 2018 MikuAuahDark
+-- Copyright (C) 2020 MikuAuahDark
 --
 -- This program is free software: you can redistribute it and/or modify
 -- it under the terms of the GNU General Public License as published by
@@ -75,15 +75,16 @@ function main.initializeStereoMix(bufsize)
 		end
 	end
 	assert(mix, "No Stereo Mix found")
-	assert(mix:start(bufsize * 4, 44100, 16, 2), "Failed to record")
+	assert(mix:start(bufsize * 4, 48000, 16, 2), "Failed to record")
 
 	-- Set mix table
 	main.mix = {device = mix}
 	main.mix.buffer = bufsize
-	main.mix.soundData = love.sound.newSoundData(bufsize, 44100, 16, 2)
+	main.mix.soundData = love.sound.newSoundData(bufsize, 48000, 16, 2)
 	main.mix.soundDataPtr = ffi.cast("int32_t*", main.mix.soundData:getPointer())
 	main.mix.ffiRing = ffi.new("int32_t[?]", bufsize)
 	main.mix.ffiRingPos = 0
+	main.audioSampleRate = 48000
 	print(main.mix.soundDataPtr)
 end
 
@@ -156,6 +157,14 @@ function love.load(argv)
 		print(string.format(usage, argv[0] or "program"))
 		love.event.quit(1) return
 	end
+	
+	if parsedArgument.canvas then
+		local w, h = parsedArgument.canvas:match("^(%d+)x(%d+)$")
+		if w and h then	
+			relyz.canvasWidth = tonumber(w)
+			relyz.canvasHeight = tonumber(h)
+		end
+	end
 
 	-- If song file is somewhat a pattern, then try to use built-in generator
 	-- The pattern is: wave:frequency:duration
@@ -208,6 +217,9 @@ function love.load(argv)
 		main.audioSampleRate = main.sound:getSampleRate()
 	elseif not(main.mixMode) then
 		-- Play audio if not in encode mode
+		main.audioPosition = 0
+		main.audioSampleRate = main.sound:getSampleRate()
+		main.audioLength = main.sound:getSampleCount()
 		main.audio:play()
 	end
 end
@@ -226,7 +238,7 @@ function love.update(dT)
 	-- Update
 	local adT = relyz.enc and 1/60 or dT
 	if main.mixMode then main.mixUpdate() end
-	print("update", main.audioPosition)
+
 	relyz.updateVisualizer(adT, main.sound, relyz.enc and math.floor(main.audioPosition) or (main.audio and main.audio:tell("samples") or 0))
 	main.time = main.time + adT
 	
