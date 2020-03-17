@@ -17,7 +17,6 @@
 local love = require("love")
 local bit = require("bit")
 local ffi = require("ffi")
-local fftw = require("fftw3")
 local ls2x = require("ls2x")
 local relyz = {
 	-- Uses livesim2 version convention
@@ -26,6 +25,7 @@ local relyz = {
 }
 
 assert(ls2x.libav, "need LS2X libav capabilities")
+assert(ls2x.fft, "need FFT capabilities")
 
 --- Load audio from system-dependent path
 -- This function uses FFmpeg API (libav) to load audio.
@@ -186,17 +186,11 @@ function relyz.loadVisualizer(name, arg)
 		relyz.waveform[2] = relyz.waveformRight
 		-- If FFT is set, then allocate needed data
 		if data.fft then
-			-- Initialize FFTW needed data and FFTW plan
-			relyz.fftSignal = ffi.new("fftw_complex[?]", relyz.neededSamples)
-			relyz.fftResult = ffi.new("fftw_complex[?]", relyz.neededSamples)
-			relyz.fftPlan = fftw.plan_dft_1d(
-				relyz.neededSamples,
-				relyz.fftSignal,
-				relyz.fftResult,
-				fftw.FORWARD,
-				fftw.ESTIMATE
-			)
+			-- Initialize FFT data
+			relyz.fftSignal = ffi.new("short[?]", relyz.neededSamples)
+			relyz.fftResult = ffi.new("kiss_fft_scalar[?]", relyz.neededSamples)
 			relyz.fftAmplitude = ffi.new("double[?]", 0.5 * relyz.neededSamples + 1)
+
 			-- Calculate window coefficients
 			relyz.window = ffi.new("double[?]", relyz.neededSamples)
 			for i = 1, relyz.neededSamples do
@@ -230,12 +224,13 @@ function relyz.updateVisualizer(dt, sound, pos)
 			local fin = (l + r) * 0.5 * relyz.window[j]
 			relyz.waveformLeft[j + 1] = l
 			relyz.waveformRight[j + 1] = r
-			relyz.fftSignal[j][0], relyz.fftSignal[j][1] = fin, fin
+			relyz.fftSignal[j] = fin * 32767
 			j = j + 1
 		end
+
 		for _ = maxSmp + 1, pos + relyz.neededSamples - 1 do
 			relyz.waveformLeft[j + 1], relyz.waveformRight[j + 1] = 0, 0
-			relyz.fftSignal[j][0], relyz.fftSignal[j][1] = 0, 0
+			relyz.fftSignal[j] = 0
 			j = j + 1
 		end
 	else
@@ -245,6 +240,7 @@ function relyz.updateVisualizer(dt, sound, pos)
 			relyz.waveformRight[j + 1] = r
 			j = j + 1
 		end
+
 		for _ = maxSmp + 1, pos + relyz.neededSamples - 1 do
 			relyz.waveformLeft[j + 1], relyz.waveformRight[j + 1] = 0, 0
 			j = j + 1
@@ -256,7 +252,8 @@ function relyz.updateVisualizer(dt, sound, pos)
 
 	-- If FFT is set, calculate FFT
 	if relyz.fftPlan ~= nil then
-		fftw.execute(relyz.fftPlan)
+		ls2x.fft.fftr1(relyz.fftSignal, relyz.fftResult, relyz.neededSamples, false)
+
 		for i = 1, relyz.neededSamples * 0.5 do
 			local d = relyz.fftResult[i - 1]
 			-- The last division is "normalizing" part

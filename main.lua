@@ -14,8 +14,10 @@
 -- You should have received a copy of the GNU General Public License
 -- along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+local love = require("love")
 local relyz = require("relyz")
 local ffi = require("ffi")
+
 local main = {time = 0, fpsTimerUpdate = 0}
 local usage = [[
 Usage: %s [options] songFile visualizer
@@ -157,10 +159,10 @@ function love.load(argv)
 		print(string.format(usage, argv[0] or "program"))
 		love.event.quit(1) return
 	end
-	
+
 	if parsedArgument.canvas then
 		local w, h = parsedArgument.canvas:match("^(%d+)x(%d+)$")
-		if w and h then	
+		if w and h then
 			relyz.canvasWidth = tonumber(w)
 			relyz.canvasHeight = tonumber(h)
 		end
@@ -241,7 +243,7 @@ function love.update(dT)
 
 	relyz.updateVisualizer(adT, main.sound, relyz.enc and math.floor(main.audioPosition) or (main.audio and main.audio:tell("samples") or 0))
 	main.time = main.time + adT
-	
+
 	main.fpsTimerUpdate = main.fpsTimerUpdate + dT
 	main.audioPosition = math.min(main.audioLength, main.audioPosition + main.audioSampleRate * adT)
 	while main.fpsTimerUpdate >= 1 do
