@@ -20,8 +20,8 @@ local ffi = require("ffi")
 local ls2x = require("ls2x")
 local relyz = {
 	-- Uses livesim2 version convention
-	VERSION_NUMBER = 01010000,
-	VERSION = "1.1.0",
+	VERSION_NUMBER = 01020000,
+	VERSION = "1.2.0",
 }
 
 assert(ls2x.libav, "need LS2X libav capabilities")
@@ -35,17 +35,19 @@ assert(ls2x.fft, "need FFT capabilities")
 function relyz.loadAudio(path)
 	local info = assert(ls2x.libav.loadAudioFile(path), "failed to load "..path)
 	local metadata = {}
+
 	-- copy metadata
 	for k, v in pairs(info.metadata) do
-		metadata[k] = v
+		metadata[k:lower()] = v
 	end
+
 	-- new sound data
 	local soundData = love.sound.newSoundData(tonumber(info.sampleCount), tonumber(info.sampleRate), 16, 2)
 	ffi.copy(soundData:getPointer(), info.samples, info.sampleCount * 4)
 	ls2x.libav.free(info.samples)
 	-- if cover art available
 	if info.coverArt then
-		local imageData = love.image.newImageData(info.coverArt.width, info.coverArt.height)
+		local imageData = love.image.newImageData(tonumber(info.coverArt.width), tonumber(info.coverArt.height))
 		ffi.copy(imageData:getPointer(), info.coverArt.data, info.coverArt.width * info.coverArt.height * 4)
 		ls2x.libav.free(info.coverArt.data)
 		metadata.coverArt = imageData
@@ -101,7 +103,7 @@ function visualizer.update(dt, data)
 		// visualizer.load
 		const double fft[samples/2];
 	} data;
-	-- Despite beig FFI data, you still use 1-based indexing
+	-- Despite being FFI data, you still use 1-based indexing
 	-- to the data, be careful!
 end
 
@@ -131,7 +133,11 @@ function relyz.loadVisualizer(name, arg)
 			return {
 				-- Return LOVE Image object
 				loadImage = function(a, ...)
-					return love.graphics.newImage(path..a, ...)
+					if type(a) == "string" then
+						return love.graphics.newImage(path..a, ...)
+					else
+						return love.graphics.newImage(a, ...)
+					end
 				end,
 				-- Return LOVE Image object
 				loadUserImage = function(a, ...)
@@ -148,8 +154,12 @@ function relyz.loadVisualizer(name, arg)
 					return love.filesystem.newFile(path..a, ...)
 				end,
 				-- Return LOVE Font object
-				loadFont = function(a, size)
-					return love.graphics.newFont(path..a, size)
+				loadFont = function(a, ...)
+					if type(a) == "string" then
+						return love.graphics.newFont(path..a, ...)
+					else
+						return love.graphics.newFont(a, ...)
+					end
 				end,
 				-- Return Lua chunk (but not running yet)
 				loadScript = function(a)
@@ -186,16 +196,31 @@ function relyz.loadVisualizer(name, arg)
 		relyz.waveform[2] = relyz.waveformRight
 		-- If FFT is set, then allocate needed data
 		if data.fft then
+			local windowing = data.window or "hanning"
 			-- Initialize FFT data
-			relyz.fftSignal = ffi.new("short[?]", relyz.neededSamples)
+			relyz.fftSignal = ffi.new("kiss_fft_scalar[?]", relyz.neededSamples)
 			relyz.fftResult = ffi.new("kiss_fft_scalar[?]", relyz.neededSamples)
 			relyz.fftAmplitude = ffi.new("double[?]", 0.5 * relyz.neededSamples + 1)
 
 			-- Calculate window coefficients
 			relyz.window = ffi.new("double[?]", relyz.neededSamples)
-			for i = 1, relyz.neededSamples do
-				local j = i - 1
-				relyz.window[j] = 0.5 * (1.0 - math.cos(2*math.pi * j / (relyz.neededSamples-1)))
+			relyz.windowSum = 0
+
+			if windowing == "hanning" then
+				-- Hann windowing
+				for i = 1, relyz.neededSamples do
+					local j = i - 1
+					local v = 0.5 * (1.0 - math.cos(2*math.pi * j / (relyz.neededSamples-1)))
+					relyz.window[j] = v
+					relyz.windowSum = relyz.windowSum + v
+				end
+			else
+				-- No windowing
+				for i = 1, relyz.neededSamples do
+					relyz.window[i - 1] = 1
+				end
+
+				relyz.windowSum = relyz.neededSamples
 			end
 		end
 	else
@@ -203,12 +228,15 @@ function relyz.loadVisualizer(name, arg)
 	end
 end
 
+---@class VisualizerData
+---@field public waveform number[][]
+---@field public fft number[]
 relyz.visualizerData = ffi.new([[struct {
 	const double *waveform[3];
 	const double *fft;
 }]])
 local Sqrt2 = math.sqrt(2)
-function relyz.updateVisualizer(dt, sound, pos)
+function relyz.updateVisualizer(dt, sound, pos, amp)
 	local smpLen = sound:getSampleCount()
 	local maxSmp = math.min(pos + relyz.neededSamples, smpLen) - 1
 
@@ -221,10 +249,9 @@ function relyz.updateVisualizer(dt, sound, pos)
 	if relyz.window then
 		for i = pos, maxSmp do
 			local l, r = sound:getSample(i, 1), sound:getSample(i, 2)
-			local fin = (l + r) * 0.5 * relyz.window[j]
-			relyz.waveformLeft[j + 1] = l
-			relyz.waveformRight[j + 1] = r
-			relyz.fftSignal[j] = fin * 32767
+			relyz.waveformLeft[j + 1] = l * amp
+			relyz.waveformRight[j + 1] = r * amp
+			relyz.fftSignal[j] = (l + r) * 0.5 * relyz.window[j] * amp
 			j = j + 1
 		end
 
@@ -236,8 +263,8 @@ function relyz.updateVisualizer(dt, sound, pos)
 	else
 		for i = pos, maxSmp do
 			local l, r = sound:getSample(i, 1), sound:getSample(i, 2)
-			relyz.waveformLeft[j + 1] = l
-			relyz.waveformRight[j + 1] = r
+			relyz.waveformLeft[j + 1] = l * amp
+			relyz.waveformRight[j + 1] = r * amp
 			j = j + 1
 		end
 
@@ -251,20 +278,20 @@ function relyz.updateVisualizer(dt, sound, pos)
 	relyz.visualizerData.waveform[2] = relyz.waveformRight
 
 	-- If FFT is set, calculate FFT
-	if relyz.fftPlan ~= nil then
-		ls2x.fft.fftr1(relyz.fftSignal, relyz.fftResult, relyz.neededSamples, false)
+	if relyz.fftAmplitude ~= nil then
+		local fftz = relyz.neededSamples * 0.5
+		ls2x.fft.fftr4(relyz.fftSignal, relyz.fftResult, relyz.neededSamples, false)
 
-		for i = 1, relyz.neededSamples * 0.5 do
-			local d = relyz.fftResult[i - 1]
-			-- The last division is "normalizing" part
-			relyz.fftAmplitude[i] = math.sqrt(d[0] * d[0] + d[1] * d[1]) / ((relyz.neededSamples * 0.5) / Sqrt2)
+		for i = 1, fftz do
+			relyz.fftAmplitude[i] = relyz.fftResult[i - 1] / relyz.windowSum
 		end
+
 		-- Set struct data
 		relyz.visualizerData.fft = relyz.fftAmplitude
 	end
 
 	-- Send update data to visualizer
-	return relyz.visualizer.update(dt, relyz.visualizerData)
+	relyz.visualizer.update(dt, relyz.visualizerData)
 end
 
 --- Verifies the existence of encoder.

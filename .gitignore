@@ -1,3 +1,2 @@
-*.dll
-FFX2.lua
-ffmpeg_include_compressed
+.vscode/
+relyz/

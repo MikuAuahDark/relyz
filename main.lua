@@ -18,13 +18,14 @@ local love = require("love")
 local relyz = require("relyz")
 local ffi = require("ffi")
 
-local main = {time = 0, fpsTimerUpdate = 0}
+local main = {time = 0, fpsTimerUpdate = 0, amp = 1}
 local usage = [[
 Usage: %s [options] songFile visualizer
 
 Options:
   -?, -help, -h          Show this message.
   -r, -render output     Render as video to `output`.
+  -canvas <w>x<h>        Set render output to specified dimensions.
   -about                 Show information.
   -<any option> <value>  Other option which may needed by specific visualizer.]]
 
@@ -87,7 +88,6 @@ function main.initializeStereoMix(bufsize)
 	main.mix.ffiRing = ffi.new("int32_t[?]", bufsize)
 	main.mix.ffiRingPos = 0
 	main.audioSampleRate = 48000
-	print(main.mix.soundDataPtr)
 end
 
 function main.mixUpdate()
@@ -161,10 +161,31 @@ function love.load(argv)
 	end
 
 	if parsedArgument.canvas then
-		local w, h = parsedArgument.canvas:match("^(%d+)x(%d+)$")
-		if w and h then
-			relyz.canvasWidth = tonumber(w)
-			relyz.canvasHeight = tonumber(h)
+		local canvasDimension = parsedArgument.canvas:lower()
+
+		if canvasDimension == "720p" or canvasDimension == "hd" then
+			relyz.canvasWidth, relyz.canvasHeight = 1280, 720
+		elseif canvasDimension == "1080p" or canvasDimension == "2k" or canvasDimension == "fhd" then
+			relyz.canvasWidth, relyz.canvasHeight = 1920, 1080
+		elseif canvasDimension == "1440p" or canvasDimension == "qhd" then
+			relyz.canvasWidth, relyz.canvasHeight = 2560, 1440
+		elseif canvasDimension == "4k" then
+			relyz.canvasWidth, relyz.canvasHeight = 3840, 2160
+		elseif canvasDimension == "8k" then
+			relyz.canvasWidth, relyz.canvasHeight = 7680, 4320
+		else
+			local w, h = parsedArgument.canvas:match("^(%d+)x(%d+)$")
+			if w and h then
+				relyz.canvasWidth = tonumber(w)
+				relyz.canvasHeight = tonumber(h)
+			end
+		end
+	end
+
+	if parsedArgument.amp then
+		local amp = tonumber(parsedArgument.amp) or 1
+		if amp > 0 then
+			main.amp = amp
 		end
 	end
 
@@ -187,13 +208,20 @@ function love.load(argv)
 	end
 
 	-- Create window
+	local rendering = parsedArgument.r or parsedArgument.render
 	love.window.setMode(relyz.windowWidth, relyz.windowHeight, {
-		vsync = (parsedArgument.r or parsedArgument.render) and 0 or 1
+		vsync = rendering and 0 or 1
 	})
 	main.title = "RE:LÖVisual: "..visualizer.." | %d FPS"
 	love.window.setTitle(string.format(main.title, 0))
 	-- Create canvas
+	if not(rendering) then
+		relyz.canvasWidth, relyz.canvasHeight = 1280, 720
+	end
+
 	main.canvas = love.graphics.newCanvas(relyz.canvasWidth, relyz.canvasHeight)
+	main.stencil = love.graphics.newCanvas(relyz.canvasWidth, relyz.canvasHeight, {format = "depth24stencil8"})
+	main.canvasInfo = {main.canvas, depthstencil = {main.stencil}}
 	-- Load visualizer
 	relyz.loadVisualizer(visualizer, parsedArgument)
 
@@ -241,11 +269,15 @@ function love.update(dT)
 	local adT = relyz.enc and 1/60 or dT
 	if main.mixMode then main.mixUpdate() end
 
-	relyz.updateVisualizer(adT, main.sound, relyz.enc and math.floor(main.audioPosition) or (main.audio and main.audio:tell("samples") or 0))
-	main.time = main.time + adT
+	relyz.updateVisualizer(adT, main.sound, relyz.enc and math.floor(main.audioPosition) or (main.audio and main.audio:tell("samples") or 0), main.amp)
 
+	main.time = main.time + adT
 	main.fpsTimerUpdate = main.fpsTimerUpdate + dT
-	main.audioPosition = math.min(main.audioLength, main.audioPosition + main.audioSampleRate * adT)
+
+	if main.audioPosition then
+		main.audioPosition = math.min(main.audioLength, main.audioPosition + main.audioSampleRate * adT)
+	end
+
 	while main.fpsTimerUpdate >= 1 do
 		love.window.setTitle(string.format(main.title, love.timer.getFPS()))
 		main.fpsTimerUpdate = main.fpsTimerUpdate - 1
@@ -254,7 +286,7 @@ end
 
 function love.draw()
 	love.graphics.push("all")
-	love.graphics.setCanvas(main.canvas)
+	love.graphics.setCanvas(main.canvasInfo)
 	love.graphics.clear(0, 0, 0, 1)
 	love.graphics.scale(
 		relyz.canvasWidth / relyz.logicalWidth,

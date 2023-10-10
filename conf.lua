@@ -20,8 +20,8 @@ assert(love._os ~= "Android" and love._os ~= "iOS", "Mobile device doesn't have 
 assert(jit and jit.status(), "LuaJIT is required & JIT compiler must be turned on")
 
 -- The actual canvas size
-relyz.canvasWidth = 1280
-relyz.canvasHeight = 720
+relyz.canvasWidth = 1920
+relyz.canvasHeight = 1080
 -- The logical screen size for visualizer
 relyz.logicalWidth = 1280
 relyz.logicalHeight = 720
@@ -39,7 +39,7 @@ setmetatable(_G, {
 function love.conf(t)
     t.identity = "lovelyzer"
     t.appendidentity = true
-    t.version = "11.3"
+    t.version = "11.2"
 	t.window = nil
 
     t.modules.joystick = false
